@@ -5,6 +5,7 @@ import platform
 
 import numpy as np
 import pygame
+import pygame_menu
 import soundcard as sc
 
 
@@ -441,33 +442,18 @@ fullscreen = False
 #
 # This is useful because audio frequencies are better
 # represented logarithmically than with equal Hz steps.
-frequencies = np.geomspace(
-    20,
-    20000,
-    N_BARS + 1
-)
 
 
-# Convert our desired frequency boundaries into FFT bins.
-#
-# The FFT returns an array of bins rather than simply saying
-# "here is 500 Hz."
-#
-# This calculation tells us which bins correspond to
-# our frequencies.
-bins = (
-    frequencies
-    * CHUNK
-    / SAMPLE_RATE
-).astype(int)
+def update_fft_bins():
+    """Recomputes frequency distributions and resetting bars array when N_BARS changes."""
+    global frequencies, bins, bars
+    frequencies = np.geomspace(20, 20000, N_BARS + 1)
+    bins = (frequencies * CHUNK / SAMPLE_RATE).astype(int)
+    bins = np.clip(bins, 0, CHUNK // 2)
+    bars = np.zeros(N_BARS, dtype=float)
 
 
-# Prevent bins from going outside the useful FFT range.
-bins = np.clip(
-    bins,
-    0,
-    CHUNK // 2
-)
+update_fft_bins()
 
 
 # Create a Hann window.
@@ -476,18 +462,6 @@ bins = np.clip(
 # makes the FFT cleaner.
 window = np.hanning(
     CHUNK
-)
-
-
-# Stores the current displayed height of each bar.
-#
-# target_bars = where the bars WANT to be.
-# bars        = where the bars CURRENTLY are.
-#
-# Keeping those separate allows smoothing.
-bars = np.zeros(
-    N_BARS,
-    dtype=float
 )
 
 
@@ -820,6 +794,124 @@ def draw_bar(surface, rectangle, color):
 
 
 # ============================================================
+# MENU CONFIGURATION & CALLBACKS
+# ============================================================
+
+
+def set_n_bars(val):
+    global N_BARS
+    N_BARS = int(val)
+    update_fft_bins()
+
+
+def set_audio_gain(val):
+    global AUDIO_GAIN
+    AUDIO_GAIN = float(val)
+
+
+def set_smoothing(val):
+    global SMOOTHING
+    SMOOTHING = float(val)
+
+
+def set_bar_gap(val):
+    global BAR_GAP
+    BAR_GAP = int(val)
+
+
+def set_trail_alpha(val):
+    global TRAIL_ALPHA
+    TRAIL_ALPHA = int(val)
+
+
+def set_bass_threshold(val):
+    global BASS_THRESHOLD
+    BASS_THRESHOLD = int(val)
+
+
+def set_treble_boost(val):
+    global TREBLE_BOOST
+    TREBLE_BOOST = float(val)
+
+def set_fps(val):
+     global FPS
+     FPS = float(val)
+
+
+# Build settings menu once outside the loop
+theme = pygame_menu.themes.THEME_DARK.copy()
+theme.title_font_size = 24
+theme.widget_font_size = 18
+
+settings_menu = pygame_menu.Menu(
+    'Settings',
+    SCREEN_W,
+    SCREEN_H,
+    theme=theme
+)
+
+settings_menu.add.range_slider(
+    'Number of Bars',
+    default=N_BARS,
+    range_values=(8, 128),
+    increment=1,
+    onchange=set_n_bars
+)
+settings_menu.add.range_slider(
+    'Audio Gain',
+    default=AUDIO_GAIN,
+    range_values=(0.5, 10.0),
+    increment=0.5,
+    onchange=set_audio_gain
+)
+settings_menu.add.range_slider(
+    'Smoothing',
+    default=SMOOTHING,
+    range_values=(0.01, 1.0),
+    increment=0.01,
+    onchange=set_smoothing
+)
+settings_menu.add.range_slider(
+    'Bar Gap',
+    default=BAR_GAP,
+    range_values=(0, 50),
+    increment=1,
+    onchange=set_bar_gap
+)
+settings_menu.add.range_slider(
+    'Trail Alpha',
+    default=TRAIL_ALPHA,
+    range_values=(10, 255),
+    increment=5,
+    onchange=set_trail_alpha
+)
+settings_menu.add.range_slider(
+    'Bass Shake Threshold',
+    default=BASS_THRESHOLD,
+    range_values=(10, 500),
+    increment=10,
+    onchange=set_bass_threshold
+)
+settings_menu.add.range_slider(
+    'Treble Boost',
+    default=TREBLE_BOOST,
+    range_values=(1.0, 10.0),
+    increment=0.5,
+    onchange=set_treble_boost
+)
+
+settings_menu.add.range_slider(
+    'FPS',
+    default=FPS,
+    range_values=(1.0, 360.0),
+    increment=1,
+    onchange=set_fps
+)
+
+settings_menu.disable()
+
+
+# ============================================================
 # MAIN LOOP
 # ============================================================
 #
@@ -850,12 +942,17 @@ running = True
 
 while running:
 
+    events = pygame.event.get()
+
+    # Pass event handling to pygame_menu when enabled
+    if settings_menu.is_enabled():
+        settings_menu.update(events)
 
     # ========================================================
     # HANDLE EVENTS
     # ========================================================
 
-    for event in pygame.event.get():
+    for event in events:
 
 
         # ----------------------------------------------------
@@ -909,6 +1006,14 @@ while running:
                     pygame.SRCALPHA
                 )
 
+                settings_menu.resize(screen_width, screen_height)
+
+            elif event.key == pygame.K_ESCAPE:
+                if settings_menu.is_enabled():
+                    settings_menu.disable()
+                else:
+                    settings_menu.enable()
+
 
         # ----------------------------------------------------
         # MANUAL RESIZING
@@ -930,6 +1035,8 @@ while running:
                     (event.w, event.h),
                     pygame.SRCALPHA
                 )
+
+                settings_menu.resize(event.w, event.h)
 
 
     # ========================================================
@@ -1267,7 +1374,8 @@ while running:
     # of the low-frequency energy.
     # ========================================================
 
-    bass = bars[:6].mean()
+    bass_range = min(6, N_BARS)
+    bass = bars[:bass_range].mean() if bass_range > 0 else 0
 
 
     # If bass is above the threshold, shake the screen.
@@ -1305,7 +1413,6 @@ while running:
         (0, 0, 0)
     )
 
-
     # Put the finished canvas onto the screen.
     #
     # The shake values move the entire visualizer.
@@ -1316,6 +1423,9 @@ while running:
             shake_y
         )
     )
+
+    if settings_menu.is_enabled():
+        settings_menu.draw(screen)
 
 
     # Show the newly rendered frame.
