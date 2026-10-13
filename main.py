@@ -2,102 +2,98 @@ import random
 import sys
 import threading
 import platform
-
+import subprocess
+import asyncio
 import numpy as np
 import pygame
 import pygame_menu
 import soundcard as sc
+from pygame_menu import themes
+from MediaPlayer import MPNowPlayingInfoCenter
+from AppKit import NSImage
 
-
-# ============================================================
 # SETTINGS
-# ============================================================
-#
-# These variables are the easiest way to customize the
-# visualizer.
-#
-# ============================================================
 
 
-# ------------------------------------------------------------
 # AUDIO ANALYSIS
-# ------------------------------------------------------------
+
 
 # CHUNK is the number of audio samples analyzed at once.
-#
+
 # Smaller CHUNK:
-#   - reacts faster
 #   - less frequency detail
-#
+#   - faster response
+
 # Larger CHUNK:
 #   - more frequency detail
 #   - slightly slower response
-#
+
 CHUNK = 2046
 
 
 # Number of vertical bars.
-#
+
 # More bars = more frequency detail.
 # Fewer bars = larger, simpler bars.
-N_BARS = 36
+
+
+N_BARS = 13
 
 
 # Audio sample rate.
-#
-# 48000 means 48,000 samples are captured every second.
-#
-# This is also used by the FFT to figure out what frequencies
+
+# Used by the FFT to figure out what frequencies
 # the audio samples represent.
 SAMPLE_RATE = 48000
 
 
-# ------------------------------------------------------------
-# WINDOW
-# ------------------------------------------------------------
 
-# Starting size of the normal window.
-#
-# This is only the normal window size.
-# Fullscreen automatically uses your monitor's resolution.
+# WINDOW
+
+
+
+
+# normal window size.
+# Fullscreen uses your monitor's resolution.
+
 SCREEN_W = 700
 SCREEN_H = 850
 
 
 # Amount of space between bars.
-#
+
 # Smaller = bars closer together.
 # Larger = more space between bars.
+
 BAR_GAP = 18
 
 
-# ------------------------------------------------------------
+
 # AUDIO RESPONSE
-# ------------------------------------------------------------
+
 
 # Multiplies the captured audio before visualization.
-#
+
 # Higher = bars react more strongly.
 # Lower = bars react less strongly.
-#
-# This does NOT make your speakers louder.
-AUDIO_GAIN = 2.5
+
+AUDIO_GAIN = 1
 
 
 # Controls how smoothly the bars move.
-#
+
 # 0.05 = very smooth and slow
 # 0.10 = smooth
 # 0.20 = more responsive
 # 1.00 = immediate movement
-SMOOTHING = 0.15
+SMOOTHING = 0.13
 
 
 # Prevents the automatic scaling from becoming too small.
-#
+
 # Higher = quieter/smaller bars.
 # Lower = more sensitive visualization.
-MIN_SCALE = 500
+MIN_SCALE = 300
 
 
 # ------------------------------------------------------------
@@ -107,40 +103,37 @@ MIN_SCALE = 500
 # Controls how quickly the trail fades.
 # Higher = shorter trail.
 # Lower = longer trail.
-TRAIL_ALPHA = 100
+TRAIL_ALPHA = 50
 
 
 # Controls when the bass screen shake starts.
 # Lower = easier to trigger bass shake.
 # Higher = harder to trigger bass shake.
-BASS_THRESHOLD = 150
+BASS_THRESHOLD = 120
 
 
 # Frames Per Second Number
 FPS = 60
 
 
-# ------------------------------------------------------------
+
 # FREQUENCY VISUAL BOOST
-# ------------------------------------------------------------
-# Treble can be hard to see in visualizer, so the higher the value is,
-# the stronger the boost in treble is in the visualizer without changing the treble in the song
-#
+
 TREBLE_BOOST = 2
 
 
 # Frequency where the treble boost starts.
-TREBLE_START = 3000
+TREBLE_START = 2500
 
 
 # Frequency where the full treble boost is reached.
-TREBLE_FULL = 12000
+TREBLE_FULL = 12500
 
 
-# ============================================================
+
 # AUDIO VARIABLES
-# ============================================================
-# This array stores the most recent chunk of audio.
+
+# Array stores the most recent chunk of audio.
 # It starts filled with zeroes because there is no audio
 # before the recording thread gives some.
 audio = np.zeros(
@@ -151,7 +144,7 @@ audio = np.zeros(
 
 # The audio is being updated by one thread while the main
 # program is reading it.
-#
+
 # A lock prevents both from accessing it at exactly the
 # same time.
 audio_lock = threading.Lock()
@@ -161,35 +154,24 @@ audio_lock = threading.Lock()
 audio_running = True
 
 
-# ============================================================
+
 # FIND AUDIO DEVICE
-# ============================================================
+
 
 
 def get_audio_device():
-    """
-    Finds the computer's system audio.
 
-    Windows:
-        Uses the default speaker's loopback.
 
-    macOS:
-        Looks for BlackHole first.
-        If BlackHole isn't available, it tries the
-        default speaker's loopback.
-    """
-
-    # platform.system() tells us which operating system
+    # platform.system() shows what operating system
     # the program is running on.
-    #
+
     # Windows → "Windows"
     # macOS   → "Darwin"
     system = platform.system()
 
 
-    # --------------------------------------------------------
+
     # WINDOWS
-    # --------------------------------------------------------
 
     if system == "Windows":
 
@@ -198,7 +180,7 @@ def get_audio_device():
 
 
         # Use the speaker as a loopback recording device.
-        #
+
         # Loopback means we're capturing what the computer
         # itself is playing rather than using the microphone.
         return sc.get_microphone(
@@ -207,9 +189,9 @@ def get_audio_device():
         )
 
 
-    # --------------------------------------------------------
+
     # MACOS
-    # --------------------------------------------------------
+
 
     elif system == "Darwin":
 
@@ -220,8 +202,8 @@ def get_audio_device():
 
 
         # Search for BlackHole.
-        #
-        # BlackHole is commonly used on macOS to route system
+
+        # BlackHole is used on macOS to route system
         # audio into an application.
         for mic in microphones:
 
@@ -239,29 +221,138 @@ def get_audio_device():
         )
 
 
-    # --------------------------------------------------------
-    # UNSUPPORTED OPERATING SYSTEM
-    # --------------------------------------------------------
-
     else:
 
         raise RuntimeError(
-            "This program only supports Windows and macOS."
+            "This program supports Windows and macOS only."
         )
 
+import subprocess
 
-# ============================================================
+def get_mac_now_playing():
+    script = '''
+    tell application "Music"
+        if player state is playing then
+            set track_name to name of current track
+            set artist_name to artist of current track
+            return artist_name & " - " & track_name
+        end if
+    end tell
+    '''
+    result = subprocess.run(["osascript", "-e", script],
+                            capture_output=True, text=True)
+    return result.stdout.strip() or None
+
+import os
+import tempfile
+
+
+
+
+
+# Use a simple, reliable path (AppleScript handles /tmp well)
+ARTWORK_DIR = "/tmp"
+ARTWORK_PNG = os.path.join(ARTWORK_DIR, "np_artwork.png")
+ARTWORK_JPG = os.path.join(ARTWORK_DIR, "np_artwork.jpg")
+
+def get_mac_artwork():
+    """Returns the path to the saved artwork, or None."""
+    script = '''
+    tell application "Music"
+        try
+            if player state is playing then
+                tell artwork 1 of current track
+                    set srcBytes to raw data
+                    if format is «class PNG » then
+                        set ext to ".png"
+                    else
+                        set ext to ".jpg"
+                    end if
+                end tell
+            else
+                return ""
+            end if
+        on error
+            return ""
+        end try
+    end tell
+    set outFile to open for access file "/tmp/np_artwork" & ext with write permission
+    set eof outFile to 0
+    write srcBytes to outFile
+    close access outFile
+    return "/tmp/np_artwork" & ext
+    '''
+    result = subprocess.run(["osascript", "-e", script],
+                            capture_output=True, text=True)
+    if result.returncode == 0:
+        path = result.stdout.strip()
+        if path and os.path.exists(path):
+            return path
+    return None
+
+import time
+
+# Shared state — updated by background thread, read by the UI
+now_playing_text = "No track"
+
+def get_now_playing():
+    if sys.platform == "darwin":
+        return get_mac_now_playing()
+    elif sys.platform == "win32":
+        return get_win_now_playing()
+    return None
+
+def get_win_now_playing():
+    """Uses SMTC — works with Spotify, Apple Music, VLC, etc."""
+    try:
+        import winsdk.windows.media.control as mct
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        manager = loop.run_until_complete(
+            mct.GlobalSystemMediaTransportControlsSessionManager.request_async()
+        )
+        session = manager.get_current_session()
+        if session:
+            props = loop.run_until_complete(
+                session.try_get_media_properties_async()
+            )
+            loop.close()
+            if props.title:
+                return f"{props.artist or ''} - {props.title}".strip(' -')
+        loop.close()
+    except Exception:
+        pass
+    return None
+
+
+now_playing_text = "No track"
+artwork_path = None
+
+def now_playing_thread():
+    global now_playing_text, artwork_path
+    while audio_running:
+        result = get_now_playing()
+        if result:
+            now_playing_text = result
+            art = get_mac_artwork()
+            if art:
+                artwork_path = art
+        time.sleep(2)
+
+np_thread = threading.Thread(target=now_playing_thread, daemon=True)
+np_thread.start()
+
 # AUDIO CAPTURE
-# ============================================================
+
 
 
 def capture_audio():
     """
-    Continuously records system audio and stores it in
-    the shared audio array.
+    Constantly records system audio and stores it in
+    the audio array.
 
-    This runs in a separate thread so the audio recording
-    doesn't stop Pygame from drawing.
+    This runs in a separate thread so that the audio recording
+    doesn't stop Pygame from drawing the bars.
     """
 
     global audio
@@ -272,9 +363,9 @@ def capture_audio():
 
 
     # Open the recorder.
-    #
+
     # channels=2 means stereo:
-    #
+
     # channel 1 = left
     # channel 2 = right
     with device.recorder(
@@ -293,13 +384,13 @@ def capture_audio():
             )
 
 
-            # ------------------------------------------------
+
             # STEREO → MONO
-            # ------------------------------------------------
-            #
+
+
             # The FFT doesn't need separate left/right data
             # for this visualization.
-            #
+
             # Averaging the two channels gives us one signal.
 
             if data.ndim > 1:
@@ -309,9 +400,9 @@ def capture_audio():
                 )
 
 
-            # ------------------------------------------------
+
             # MAKE SURE THE CHUNK IS THE CORRECT SIZE
-            # ------------------------------------------------
+
 
             if len(data) < CHUNK:
 
@@ -327,21 +418,20 @@ def capture_audio():
                 data = data[:CHUNK]
 
 
-            # ------------------------------------------------
+
             # AUDIO GAIN
-            # ------------------------------------------------
-            #
+
+
             # Makes the visualization more sensitive.
-            #
-            # This doesn't increase the actual volume coming
-            # from the speakers.
+
+
 
             data = data * AUDIO_GAIN
 
 
-            # ------------------------------------------------
+
             # KEEP AUDIO IN NORMAL RANGE
-            # ------------------------------------------------
+
 
             data = np.clip(
                 data,
@@ -350,9 +440,9 @@ def capture_audio():
             )
 
 
-            # ------------------------------------------------
+
             # UPDATE THE SHARED AUDIO ARRAY
-            # ------------------------------------------------
+
 
             with audio_lock:
 
@@ -360,7 +450,7 @@ def capture_audio():
 
 
 # Start the audio recording in a background thread.
-#
+
 # Without a separate thread, recording could block the
 # Pygame window from updating.
 audio_thread = threading.Thread(
@@ -371,16 +461,15 @@ audio_thread = threading.Thread(
 audio_thread.start()
 
 
-# ============================================================
+
 # PYGAME SETUP
-# ============================================================
+
 
 
 pygame.init()
 
 
 # Create the normal window.
-#
 # RESIZABLE allows the user to drag the window larger/smaller.
 screen = pygame.display.set_mode(
     (SCREEN_W, SCREEN_H),
@@ -399,9 +488,9 @@ clock = pygame.time.Clock()
 
 
 # Canvas is where we draw the visualizer.
-#
+
 # SRCALPHA allows transparency, which is needed for:
-#
+
 #   - glow
 #   - trails
 #   - fading
@@ -415,31 +504,28 @@ canvas = pygame.Surface(
 fullscreen = False
 
 
-# ============================================================
+
 # FFT SETUP
-# ============================================================
-#
+
+
 # The FFT is the part that turns the raw audio waveform into
 # frequency information.
-#
-#
+
+
 # FFT result:
-#
+
 # frequency → strength
-#
+
 # Example:
 # 50 Hz     → strong
 # 500 Hz    → medium
 # 2000 Hz   → strong
 # 10000 Hz  → weak
-#
+
 # Create frequency boundaries.
-#
-# 20 Hz = low end of human hearing
-# 20,000 Hz = high end of human hearing
-#
+
 # geomspace creates logarithmically spaced frequencies.
-#
+
 # This is useful because audio frequencies are better
 # represented logarithmically than with equal Hz steps.
 
@@ -447,7 +533,7 @@ fullscreen = False
 def update_fft_bins():
     """Recomputes frequency distributions and resetting bars array when N_BARS changes."""
     global frequencies, bins, bars
-    frequencies = np.geomspace(20, 20000, N_BARS + 1)
+    frequencies = np.geomspace(50, 12500, N_BARS + 1)
     bins = (frequencies * CHUNK / SAMPLE_RATE).astype(int)
     bins = np.clip(bins, 0, CHUNK // 2)
     bars = np.zeros(N_BARS, dtype=float)
@@ -457,7 +543,7 @@ update_fft_bins()
 
 
 # Create a Hann window.
-#
+
 # This reduces the abrupt edges of each audio chunk and
 # makes the FFT cleaner.
 window = np.hanning(
@@ -469,20 +555,20 @@ window = np.hanning(
 max_scale = MIN_SCALE
 
 
-# ============================================================
+
 # COLOR FUNCTION
-# ============================================================
-#
+
+
 # This determines the color based on ACTUAL FREQUENCY.
-#
+
 # The spectrum is approximately:
-#
+
 #     BASS            MIDS             TREBLE
-#
-# 20 Hz -------- 500 Hz -------- 3000 Hz -------- 20 kHz
-#
+
+# 45 Hz -------- 500 Hz -------- 3000 Hz -------- 12.5 kHz
+
 # BLUE               PURPLE               RED
-#
+
 
 
 def get_frequency_color(frequency):
@@ -506,14 +592,12 @@ def get_frequency_color(frequency):
     """
 
 
-    # --------------------------------------------------------
     # VERY LOW FREQUENCIES
-    # --------------------------------------------------------
-    #
-    # 20 Hz - 250 Hz
-    #
+
+    # 50 Hz - 250 Hz
+
     # This is primarily the bass region.
-    #
+
     # Keep it strongly blue.
 
     if frequency <= 250:
@@ -525,12 +609,11 @@ def get_frequency_color(frequency):
         )
 
 
-    # --------------------------------------------------------
+
     # BASS → PURPLE
-    # --------------------------------------------------------
-    #
+
     # 250 Hz - 700 Hz
-    #
+
     # Gradually move from blue to purple.
 
     elif frequency <= 700:
@@ -564,14 +647,13 @@ def get_frequency_color(frequency):
         )
 
 
-    # --------------------------------------------------------
+
     # MIDRANGE
-    # --------------------------------------------------------
-    #
+
     # 700 Hz - 3000 Hz
-    #
+
     # Keep this region purple.
-    #
+
     # this region gives the visualizer a clear purple midrange.
 
     elif frequency <= 3000:
@@ -583,12 +665,10 @@ def get_frequency_color(frequency):
         )
 
 
-    # --------------------------------------------------------
     # PURPLE → MAGENTA
-    # --------------------------------------------------------
-    #
+
     # 3000 Hz - 5000 Hz
-    #
+
     # This is the transition from mids toward treble.
 
     elif frequency <= 5000:
@@ -601,7 +681,7 @@ def get_frequency_color(frequency):
 
         # Purple:
         #     (180, 0, 255)
-        #
+
         # Magenta:
         #     (255, 0, 180)
 
@@ -624,13 +704,12 @@ def get_frequency_color(frequency):
         )
 
 
-    # --------------------------------------------------------
+
     # MAGENTA → RED
-    # --------------------------------------------------------
-    #
+
+
     # 5000 Hz - 10000 Hz
-    #
-    # Now we're clearly entering treble.
+
 
     elif frequency <= 10000:
 
@@ -661,12 +740,12 @@ def get_frequency_color(frequency):
         )
 
 
-    # --------------------------------------------------------
+
     # VERY HIGH TREBLE
-    # --------------------------------------------------------
-    #
-    # 10,000 Hz - 20,000 Hz
-    #
+
+
+    # 10,000 Hz - 12,500 Hz
+
     # Keep these bars strongly red.
 
     else:
@@ -678,9 +757,9 @@ def get_frequency_color(frequency):
         )
 
 
-# ============================================================
+
 # DRAW BAR
-# ============================================================
+
 
 
 def draw_bar(surface, rectangle, color):
@@ -711,9 +790,9 @@ def draw_bar(surface, rectangle, color):
     )
 
 
-    # --------------------------------------------------------
+
     # BIG GLOW
-    # --------------------------------------------------------
+
 
     glow_surface = pygame.Surface(
         glow1.size,
@@ -740,9 +819,9 @@ def draw_bar(surface, rectangle, color):
     )
 
 
-    # --------------------------------------------------------
+
     # MEDIUM GLOW
-    # --------------------------------------------------------
+
 
     glow_surface = pygame.Surface(
         glow2.size,
@@ -761,9 +840,9 @@ def draw_bar(surface, rectangle, color):
     )
 
 
-    # --------------------------------------------------------
+
     # SMALL GLOW
-    # --------------------------------------------------------
+
 
     glow_surface = pygame.Surface(
         glow3.size,
@@ -782,9 +861,9 @@ def draw_bar(surface, rectangle, color):
     )
 
 
-    # --------------------------------------------------------
+
     # SOLID BAR
-    # --------------------------------------------------------
+
 
     pygame.draw.rect(
         surface,
@@ -839,16 +918,24 @@ def set_fps(val):
 
 
 # Build settings menu once outside the loop
-theme = pygame_menu.themes.THEME_DARK.copy()
+font = pygame_menu.font.FONT_8BIT
+
+mytheme = themes.Theme(background_color=(0, 0, 0, 255),
+                       title_background_color=(255, 255, 255),
+                       title_font_shadow=True,
+                       widget_padding=25,widget_font=font, title_bar_style = pygame_menu.widgets.MENUBAR_STYLE_NONE, widget_alignment = pygame_menu.locals.ALIGN_LEFT)
+
+theme = mytheme
 theme.title_font_size = 24
 theme.widget_font_size = 18
 
 settings_menu = pygame_menu.Menu(
-    'Settings',
+    'Visualizer Settings',
     SCREEN_W,
     SCREEN_H,
-    theme=theme
+    theme=mytheme
 )
+
 
 settings_menu.add.range_slider(
     'Number of Bars',
@@ -860,16 +947,16 @@ settings_menu.add.range_slider(
 settings_menu.add.range_slider(
     'Audio Gain',
     default=AUDIO_GAIN,
-    range_values=(0.5, 10.0),
-    increment=0.5,
-    onchange=set_audio_gain
+    range_values=(1, 10.0),
+    increment=1,
+    onchange=set_audio_gain,
 )
 settings_menu.add.range_slider(
     'Smoothing',
     default=SMOOTHING,
     range_values=(0.01, 1.0),
     increment=0.01,
-    onchange=set_smoothing
+    onchange=set_smoothing,
 )
 settings_menu.add.range_slider(
     'Bar Gap',
@@ -882,7 +969,7 @@ settings_menu.add.range_slider(
     'Trail Alpha',
     default=TRAIL_ALPHA,
     range_values=(10, 255),
-    increment=5,
+    increment=1,
     onchange=set_trail_alpha
 )
 settings_menu.add.range_slider(
@@ -891,13 +978,15 @@ settings_menu.add.range_slider(
     range_values=(10, 500),
     increment=10,
     onchange=set_bass_threshold
+
 )
 settings_menu.add.range_slider(
     'Treble Boost',
     default=TREBLE_BOOST,
     range_values=(1.0, 10.0),
-    increment=0.5,
+    increment=1,
     onchange=set_treble_boost
+
 )
 
 settings_menu.add.range_slider(
@@ -906,19 +995,62 @@ settings_menu.add.range_slider(
     range_values=(1.0, 360.0),
     increment=1,
     onchange=set_fps
+
 )
 
+# --- NOW PLAYING RENDER (cached) ---
+np_font = pygame.font.SysFont("Proxima Nova", 40)
+np_surface = None
+np_last_text = None
+
+def render_now_playing(text, screen_width):
+    """Re-renders the gradient surface only when text changes."""
+    global np_surface, np_last_text
+    if text == np_last_text:
+        return np_surface  # reuse cached surface
+
+    np_surface = np_font.render(f"♪ {text}", True, (255, 255, 255)).convert_alpha()
+
+    array = pygame.surfarray.pixels3d(np_surface)
+    alpha = pygame.surfarray.pixels_alpha(np_surface)
+    w = array.shape[0]
+    m = np.clip(np.arange(w) / w, 0, 1)[:, np.newaxis]
+
+    for j in range(3):
+        c = 0 * (1 - m) + 255 * m if j == 0 else \
+            0 * (1 - m) + 0 * m if j == 1 else \
+                255 * (1 - m) + 0 * m
+        array[:, :, j] = np.where(alpha > 0, c, 0).astype(np.uint8)
+
+    del array
+    del alpha
+    np_last_text = text
+    return np_surface
+
+
+artwork_surface = None
+artwork_last_path = None
+ARTWORK_SIZE = 80
+
+def load_artwork(path):
+    global artwork_surface, artwork_last_path
+    if path is None or path == artwork_last_path:
+        return artwork_surface
+    try:
+        img = pygame.image.load(path).convert_alpha()
+        img = pygame.transform.smoothscale(img, (ARTWORK_SIZE, ARTWORK_SIZE))
+        artwork_surface = img
+        artwork_last_path = path
+    except pygame.error as e:
+        print(f"Artwork load failed: {e}")
+        artwork_surface = None
+    return artwork_surface
 settings_menu.disable()
 
 
-# ============================================================
+
 # MAIN LOOP
-# ============================================================
-#
-# The main loop is the heart of the program.
-#
-# It repeats hundreds of times per second:
-#
+
 #   EVENTS
 #      ↓
 #   GET AUDIO
@@ -934,7 +1066,6 @@ settings_menu.disable()
 #   DRAW
 #      ↓
 #   DISPLAY
-# ============================================================
 
 
 running = True
@@ -948,25 +1079,23 @@ while running:
     if settings_menu.is_enabled():
         settings_menu.update(events)
 
-    # ========================================================
+
     # HANDLE EVENTS
-    # ========================================================
+
 
     for event in events:
 
 
-        # ----------------------------------------------------
         # CLOSE WINDOW
-        # ----------------------------------------------------
+
 
         if event.type == pygame.QUIT:
 
             running = False
 
 
-        # ----------------------------------------------------
         # KEYBOARD
-        # ----------------------------------------------------
+
 
         if event.type == pygame.KEYDOWN:
 
@@ -1015,9 +1144,9 @@ while running:
                     settings_menu.enable()
 
 
-        # ----------------------------------------------------
+
         # MANUAL RESIZING
-        # ----------------------------------------------------
+
 
         if event.type == pygame.VIDEORESIZE:
 
@@ -1039,21 +1168,20 @@ while running:
                 settings_menu.resize(event.w, event.h)
 
 
-    # ========================================================
+
     # GET CURRENT SCREEN SIZE
-    # ========================================================
-    #
+
+
     # This is why fullscreen and resizing work.
-    #
     # We never assume that the screen is still 700x850.
-    # ========================================================
+
 
     screen_width, screen_height = screen.get_size()
 
 
-    # ========================================================
+
     # GET AUDIO
-    # ========================================================
+
 
     with audio_lock:
 
@@ -1062,29 +1190,28 @@ while running:
         samples = audio.copy()
 
 
-    # ========================================================
+
     # PREPARE AUDIO FOR FFT
-    # ========================================================
+
 
     # Apply the Hann window.
     samples *= window
 
 
-    # ========================================================
+
     # FFT
-    # ========================================================
-    #
+
     # Convert the audio waveform into frequency information.
-    # ========================================================
+
 
     spectrum = np.abs(
         np.fft.rfft(samples)
     )
 
 
-    # ========================================================
+
     # CREATE TARGET BAR VALUES
-    # ========================================================
+
 
     target_bars = np.zeros(
         N_BARS,
@@ -1115,7 +1242,7 @@ while running:
 
 
         # Find the strongest frequency inside this bar's range.
-        #
+
         # Using MAX means one strong frequency can make the
         # entire bar react.
         target_bars[i] = np.max(
@@ -1123,20 +1250,13 @@ while running:
         )
 
 
-        # ====================================================
+
         # TREBLE VISUAL BOOST
-        # ====================================================
-        #
-        # Higher frequencies naturally tend to look weaker.
-        #
+
         # We calculate this bar's center frequency and give
         # frequencies above TREBLE_START a gradually increasing
         # visual boost.
-        #
-        # IMPORTANT:
-        #
-        # This does NOT change the music.
-        # It only changes how tall the treble looks.
+
 
         frequency = (
             frequencies[i]
@@ -1147,10 +1267,10 @@ while running:
         if frequency > TREBLE_START:
 
             # Calculate how far through the boost range we are.
-            #
+
             # At TREBLE_START:
             #     amount = 0
-            #
+
             # At TREBLE_FULL:
             #     amount = 1
 
@@ -1180,9 +1300,9 @@ while running:
             target_bars[i] *= boost
 
 
-    # ========================================================
+
     # AUTOMATIC SCALE
-    # ========================================================
+
 
     # Find the strongest bar right now.
     current_max = np.max(
@@ -1192,7 +1312,7 @@ while running:
 
     # max_scale determines how much audio is needed for
     # a bar to reach close to the top.
-    #
+
     # The 0.95 causes the scale to slowly fall when the music
     # becomes quieter instead of instantly changing.
     max_scale = max(
@@ -1202,18 +1322,18 @@ while running:
     )
 
 
-    # ========================================================
+
     # SMOOTH BAR MOVEMENT
-    # ========================================================
+
 
     for i in range(N_BARS):
 
 
         # Convert the audio value into pixels.
-        #
+
         # - target_bars[i] / max_scale gives approximately
         #   0 → 1.
-        #
+
         # - screen_height - 40 gives us the maximum visual
         #   height available.
 
@@ -1227,7 +1347,7 @@ while running:
 
         # Instead of instantly jumping to target_height,
         # move a percentage of the distance every frame.
-        #
+
         # This is what makes the animation smooth.
 
         bars[i] += (
@@ -1243,16 +1363,16 @@ while running:
         )
 
 
-    # ========================================================
+
     # TRAIL
-    # ========================================================
-    #
+
+
     # The canvas isn't completely erased.
-    #
+
     # Instead, transparent black is drawn over it.
-    #
+
     # This makes old frames fade away.
-    # ========================================================
+
 
     fade = pygame.Surface(
         (screen_width, screen_height),
@@ -1276,13 +1396,13 @@ while running:
     )
 
 
-    # ========================================================
+
     # BAR WIDTH
-    # ========================================================
-    #
+
+
     # Calculate this every frame so bars automatically fit
     # whatever screen size we're using.
-    # ========================================================
+
 
     bar_width = (
         screen_width
@@ -1290,16 +1410,15 @@ while running:
     ) / N_BARS
 
 
-    # ========================================================
+
     # DRAW EVERY BAR
-    # ========================================================
+
 
     for i in range(N_BARS):
 
 
-        # ----------------------------------------------------
         # X POSITION
-        # ----------------------------------------------------
+
 
         x = i * (
             bar_width
@@ -1307,15 +1426,15 @@ while running:
         )
 
 
-        # ----------------------------------------------------
+
         # BAR HEIGHT
-        # ----------------------------------------------------
+
 
         bar_height = bars[i]
 
 
         # Pygame's y=0 is at the TOP.
-        #
+
         # We want the bars to grow upward from the bottom.
         y = (
             screen_height
@@ -1332,12 +1451,12 @@ while running:
         )
 
 
-        # ----------------------------------------------------
+
         # FIND THIS BAR'S FREQUENCY
-        # ----------------------------------------------------
-        #
+
+
         # Each bar represents a frequency range.
-        #
+
         # We use the middle of that range to decide its color.
 
         frequency = (
@@ -1346,18 +1465,17 @@ while running:
         ) / 2
 
 
-        # ----------------------------------------------------
+
         # GET COLOR
-        # ----------------------------------------------------
+
 
         color = get_frequency_color(
             frequency
         )
 
 
-        # ----------------------------------------------------
         # DRAW BAR + GLOW
-        # ----------------------------------------------------
+
 
         draw_bar(
             canvas,
@@ -1366,13 +1484,10 @@ while running:
         )
 
 
-    # ========================================================
     # BASS SCREEN SHAKE
-    # ========================================================
-    #
+
     # The first six bars are used as a rough measurement
     # of the low-frequency energy.
-    # ========================================================
 
     bass_range = min(6, N_BARS)
     bass = bars[:bass_range].mean() if bass_range > 0 else 0
@@ -1403,9 +1518,7 @@ while running:
         shake_y = 0
 
 
-    # ========================================================
     # DISPLAY
-    # ========================================================
 
 
     # Clear the actual screen.
@@ -1414,7 +1527,7 @@ while running:
     )
 
     # Put the finished canvas onto the screen.
-    #
+
     # The shake values move the entire visualizer.
     screen.blit(
         canvas,
@@ -1423,12 +1536,27 @@ while running:
             shake_y
         )
     )
+    # NOW PLAYING (text + artwork)
+    if now_playing_text and now_playing_text != "No track":
+        # Artwork (to the left of the text)
+        if artwork_path:
+            art = load_artwork(artwork_path)
+            if art:
+                # Draw a subtle rounded border
+                border = pygame.Surface((ARTWORK_SIZE + 4, ARTWORK_SIZE + 4), pygame.SRCALPHA)
+                pygame.draw.rect(border, (255, 255, 255, 40), border.get_rect(),
+                                 border_radius=8)
+                screen.blit(border, (screen_width - 15 - np_text_width() - ARTWORK_SIZE - 12, 2))
+                screen.blit(art, (screen_width - 15 - np_text_width() - ARTWORK_SIZE - 10, 4))
 
-    if settings_menu.is_enabled():
-        settings_menu.draw(screen)
+        # Text (your existing gradient code)
+        np_surface = render_now_playing(now_playing_text, screen_width)
+        if np_surface:
+            np_rect = np_surface.get_rect(midright=(screen_width - 15, 20))
+            screen.blit(np_surface, np_rect)
 
 
-    # Show the newly rendered frame.
+            # Show the newly rendered frame.
     pygame.display.flip()
 
 
@@ -1436,9 +1564,9 @@ while running:
     clock.tick(FPS)
 
 
-# ============================================================
+
 # CLEANUP
-# ============================================================
+
 
 
 # Tell the recording thread to stop.
